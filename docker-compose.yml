@@ -10,7 +10,7 @@ services:
     links:
     - redis
     volumes:
-    - "${SAMPLES_DIR}:/mnt/samples"
+    - "/optane/yaraFiles/samples/:/mnt/samples"
     depends_on:
       - "redis"
       - "ursadb"
@@ -23,12 +23,12 @@ services:
     - redis
     - ursadb
     volumes:
-    - "${SAMPLES_DIR}:/mnt/samples"
+    - "/optane/yaraFiles/samples/:/mnt/samples"
     depends_on:
       - "redis"
       - "ursadb"
     environment:
-      - "MQUERY_PLUGINS=${MQUERY_PLUGINS}"
+    - "MQUERY_BACKEND=tcp://ursadb:9281"
   ursadb:
     restart: always
     build:
@@ -37,8 +37,8 @@ services:
     ports:
     - "127.0.0.1:9281:9281"
     volumes:
-    - "${SAMPLES_DIR}:/mnt/samples"
-    - "${INDEX_DIR}:/var/lib/ursadb"
+    - "/optane/yaraFiles/samples/:/mnt/samples"
+    - "/optane/yaraFiles/ursadb-indexes/general/:/var/lib/ursadb"
   redis:
     restart: always
     image: redis

@@ -73,6 +73,11 @@ class Agent:
             return
 
         if job.status == "new":
+            agents_files = self.db.get_agent_files(job_id, self.group_id)
+            logging.info(agents_files)
+            if (agents_files):
+                # already init for this agent, return
+                return
             # First search request - find datasets to query
             logging.info("New job, generate subtasks...")
             result = self.ursa.topology()
@@ -84,10 +89,18 @@ class Agent:
 
             if "error" in result:
                 raise RuntimeError(result["error"])
+            
+            logging.info("Datasets: %s", ' '.join(list(result["result"]["datasets"].keys())))
             self.db.init_job_datasets(
                 self.group_id,
                 job_id,
                 list(result["result"]["datasets"].keys()),
+                job.agents_left
+            )
+            self.db.init_agent_files(
+                self.group_id,
+                job_id,
+                len(list(result["result"]["datasets"])),
             )
 
         logging.info("Get next dataset to query...")
@@ -109,6 +122,7 @@ class Agent:
         logging.info(f"Iterator {iterator} contains {file_count} files")
 
         total_files = self.db.update_job_files(job_id, file_count)
+        total_files = self.db.update_agent_files(job_id, self.group_id, file_count)
         if job.files_limit and total_files > job.files_limit:
             raise RuntimeError(
                 f"Too many candidates after prefiltering (limit: {job.files_limit}). "
@@ -117,7 +131,7 @@ class Agent:
 
         self.db.agent_start_job(self.group_id, job_id, iterator)
         self.db.agent_continue_search(self.group_id, job_id)
-        self.db.dataset_query_done(job_id)
+        self.db.dataset_query_done(job_id, self.group_id)
 
     def __load_plugins(self) -> None:
         self.plugin_config_version: int = self.db.get_config_version()
@@ -195,6 +209,7 @@ class Agent:
         num_errors = 0
         num_files = len(files)
         self.db.job_start_work(job, num_files)
+        self.db.agent_start_work(job, self.group_id, num_files)
 
         # filenames returned from ursadb are usually paths, but may be
         # rewritten by plugins. Create a map {original_name: file_path}
@@ -232,8 +247,10 @@ class Agent:
 
         if num_errors > 0:
             self.db.job_update_error(job, num_errors)
+            self.db.agent_update_error(job, self.group_id, num_errors)
 
         self.db.job_update_work(job, num_files, num_matches)
+        self.db.agent_update_work(job, self.group_id, num_files, num_matches)
 
     def __yara_task(self, job: JobId, iterator: str) -> None:
         """Get a next batch of worm from the db. If there are still files
@@ -249,7 +266,9 @@ class Agent:
         MIN_BATCH_SIZE = 10
         MAX_BATCH_SIZE = 500
 
-        taken_files = j.files_processed + j.files_in_progress
+        files = self.db.get_agent_files(job, self.group_id)
+
+        taken_files = files.processed + files.in_progress
 
         # Never do more than MAX_BATCH_SIZE files at once.
         batch_size = MAX_BATCH_SIZE
@@ -258,7 +277,7 @@ class Agent:
         batch_size = min(batch_size, taken_files)
 
         # Don't take more than 1/4 of files left at once (to speed up finishes).
-        batch_size = min(batch_size, (j.total_files - taken_files) // 4)
+        batch_size = min(batch_size, (files.total - taken_files) // 4)
 
         # Finally, always process at least MIN_BATCH_SIZE files.
         batch_size = max(batch_size, MIN_BATCH_SIZE)
@@ -272,11 +291,14 @@ class Agent:
             self.__execute_yara(job, pop_result.files)
 
         j = self.db.get_job(job)
+        files = self.db.get_agent_files(job, self.group_id)
+        logging.info("Check job should be finished, j.status=%s, j.files_processed=%d, j.total_files=%d j.datasets_left=%d",
+        j.status, files.processed, files.total, j.datasets_left)
         if (
-            j.status == "processing"
-            and j.files_processed == j.total_files
-            and j.datasets_left == 0
+            files.processed == files.total
+            and files.datasets_left == 0
         ):
+            logging.info("FINISH JOB FOR THAT DAEMON")
             # The job is over, work of this agent as done.
             self.db.agent_finish_job(job)
 

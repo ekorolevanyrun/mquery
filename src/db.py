@@ -1,12 +1,13 @@
 from collections import defaultdict
 from typing import List, Optional, Dict, Any
-from schema import JobSchema, MatchesSchema, AgentSpecSchema, ConfigSchema
+from schema import JobSchema, MatchesSchema, AgentSpecSchema, ConfigSchema, AgentFiles
 from time import time
 import json
 import random
 import string
 from redis import StrictRedis
 from enum import Enum
+import logging
 
 
 # "Magic" plugin name, used for configuration of mquery itself
@@ -116,6 +117,21 @@ class Database:
             taints=json.loads(data.get("taints", "[]")),
             total_datasets=data.get("total_datasets", 0),
             datasets_left=data.get("datasets_left", 0),
+            agents_left=data.get("agents_left", 0),
+            agents_started=data.get("agents_started", 0),
+        )
+
+    def get_agent_files(self, job: JobId, agent_id: str) -> AgentFiles:
+        data = self.redis.hgetall(f"job-files:{agent_id}:{job.hash}")
+        if (len(data)==0):
+          return None
+        return AgentFiles(
+            total=data.get("total", 0),
+            processed=data.get("processed", 0),
+            matched=data.get("matched", 0),
+            in_progress=data.get("in_progress", 0),
+            errored=data.get("errored", 0),
+            datasets_left=data.get("datasets_left", 0),
         )
 
     def remove_query(self, job: JobId) -> None:
@@ -138,6 +154,15 @@ class Database:
         """
         self.redis.hincrby(job.key, "files_in_progress", files_in_progress)
 
+    def agent_start_work(self, job: JobId, agent_id: str, files_in_progress: int) -> None:
+        """ Updates the number of files being processed right now.
+        :param job: ID of the job being updated.
+        :type job: JobId
+        :param files_in_progress: Number of files in the current work unit.
+        :type files_in_progress: int
+        """
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "in_progress", files_in_progress)
+
     def job_update_work(
         self, job: JobId, files_processed: int, files_matched: int
     ) -> None:
@@ -149,11 +174,28 @@ class Database:
         self.redis.hincrby(job.key, "files_in_progress", -files_processed)
         self.redis.hincrby(job.key, "files_matched", files_matched)
 
+    def agent_update_work(
+        self, job: JobId, agent_id: str, files_processed: int, files_matched: int
+    ) -> None:
+        """ Update progress for the job. This will increment number of files processed
+        and matched, and if as a result all files are processed, will change the job
+        status to `done`
+        """
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "processed", files_processed)
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "in_progress", -files_processed)
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "matched", files_matched)
+
     def job_update_error(self, job: JobId, files_errored: int) -> None:
         """ Update error for the job if it appears during agents' work.
         This will increment number of files errored and write them to the variable.
         """
         self.redis.hincrby(job.key, "files_errored", files_errored)
+
+    def agent_update_error(self, job: JobId, agent_id: str, files_errored: int) -> None:
+        """ Update error for the job if it appears during agents' work.
+        This will increment number of files errored and write them to the variable.
+        """
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "errored", files_errored)
 
     def create_search_task(
         self,
@@ -191,6 +233,7 @@ class Database:
             "agents_left": len(agents),
             "datasets_left": 0,
             "total_datasets": 0,
+            "agents_started": 0,
         }
 
         job_obj["taints"] = json.dumps(taints)
@@ -205,21 +248,38 @@ class Database:
             self.redis.rpush(f"agent:{agent}:queue-command", command)
 
     def init_job_datasets(
-        self, agent_id: str, job: JobId, datasets: List[str]
+        self, agent_id: str, job: JobId, datasets: List[str], agents_left: int
     ) -> None:
         if datasets:
             self.redis.lpush(f"job-ds:{agent_id}:{job.hash}", *datasets)
             self.redis.hincrby(job.key, "total_datasets", len(datasets))
             self.redis.hincrby(job.key, "datasets_left", len(datasets))
-        self.redis.hset(job.key, "status", "processing")
+        agents_started = self.redis.hincrby(job.key, "agents_started", 1)
+        logging.info(f"INIT DATASET FOR {agent_id} agent_started={agents_started} agentsleft={agents_left}")
+        if (agents_started >= agents_left):
+          self.redis.hset(job.key, "status", "processing")
+
+    def init_agent_files(
+      self, agent_id: str, job: JobId, datasets_left: int,
+    ) -> None:
+      obj = {
+        "total": 0,
+        "processed": 0,
+        "in_progress": 0,
+        "matched": 0,
+        "errored": 0,
+        "datasets_left": datasets_left,
+      }
+      self.redis.hmset(f"job-files:{agent_id}:{job.hash}", obj)
 
     def get_next_search_dataset(
         self, agent_id: str, job: JobId
     ) -> Optional[str]:
         return self.redis.lpop(f"job-ds:{agent_id}:{job.hash}")
 
-    def dataset_query_done(self, job: JobId):
+    def dataset_query_done(self, job: JobId, agent_id: str):
         self.redis.hincrby(job.key, "datasets_left", -1)
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "datasets_left", -1)
 
     def job_datasets_left(self, agent_id: str, job: JobId) -> int:
         return self.redis.llen(f"job-ds:{agent_id}:{job.hash}")
@@ -281,6 +341,9 @@ class Database:
     def update_job_files(self, job: JobId, total_files: int) -> int:
         return self.redis.hincrby(job.key, "total_files", total_files)
 
+    def update_agent_files(self, job: JobId, agent_id: str, total_files: int) -> int:
+        return self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "total", total_files)
+
     def agent_start_job(
         self, agent_id: str, job: JobId, iterator: str
     ) -> None:
@@ -289,6 +352,7 @@ class Database:
 
     def agent_finish_job(self, job: JobId) -> None:
         new_agents = self.redis.hincrby(job.key, "agents_left", -1)
+        logging.info("Agents left=%d", new_agents)
         if new_agents <= 0:
             self.redis.hmset(
                 job.key, {"status": "done", "finished": int(time())}
