@@ -267,12 +267,6 @@ class Agent:
         MAX_BATCH_SIZE = 500
 
         files = self.db.get_agent_files(job, self.group_id)
-        if (
-            files.processed == files.total
-            and files.datasets_left == 0
-        ):
-            logging.info("JOB ALREADY FINISH FOR THAT DAEMON")
-            return
 
         taken_files = files.processed + files.in_progress
 
@@ -293,6 +287,9 @@ class Agent:
             # The job still have some files, put it back on the queue.
             self.db.agent_start_job(self.group_id, job, iterator)
             logging.info("-> Iterator not empty!")
+        else:
+            self.db.agent_dataset_done(job, self.group_id)
+            
         if pop_result.files:
             # If there are any files popped iterator, work on them
             self.__execute_yara(job, pop_result.files)

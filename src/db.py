@@ -279,7 +279,9 @@ class Database:
 
     def dataset_query_done(self, job: JobId, agent_id: str):
         self.redis.hincrby(job.key, "datasets_left", -1)
-        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "datasets_left", -1)
+        # self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "datasets_left", -1)
+    def agent_dataset_done(self, job: JobId, agent_id: str):
+        self.redis.hincrby(f"job-files:{agent_id}:{job.hash}", "datasets_left". -1)
 
     def job_datasets_left(self, agent_id: str, job: JobId) -> int:
         return self.redis.llen(f"job-ds:{agent_id}:{job.hash}")
