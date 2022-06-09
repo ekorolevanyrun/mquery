@@ -72,12 +72,8 @@ class Agent:
             logging.info("Job was cancelled, returning...")
             return
 
-        if job.status == "new":
-            agents_files = self.db.get_agent_files(job_id, self.group_id)
-            logging.info(agents_files)
-            if (agents_files):
-                # already init for this agent, return
-                return
+        agents_files = self.db.get_agent_files(job_id, self.group_id)
+        if job.status == "new" and not agents_files:
             # First search request - find datasets to query
             logging.info("New job, generate subtasks...")
             result = self.ursa.topology()
@@ -288,8 +284,9 @@ class Agent:
             self.db.agent_start_job(self.group_id, job, iterator)
             logging.info("-> Iterator not empty!")
         else:
+            logging.info("-> Done current dataset for agent")
             self.db.agent_dataset_done(job, self.group_id)
-            
+
         if pop_result.files:
             # If there are any files popped iterator, work on them
             self.__execute_yara(job, pop_result.files)
