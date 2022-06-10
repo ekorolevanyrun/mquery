@@ -352,8 +352,17 @@ class Database:
         job_data = json.dumps({"job": job.key, "iterator": iterator})
         self.redis.rpush(f"agent:{agent_id}:queue-yara", job_data)
 
-    def agent_finish_job(self, job: JobId) -> None:
+    def agent_finish_job(self, job: JobId, agent_id: str) -> None:
         new_agents = self.redis.hincrby(job.key, "agents_left", -1)
+        agentFilesKeys = [
+            "total",
+            "in_progress",
+            "matched",
+            "processed",
+            "errored",
+            "datasets_left",
+        ]
+        self.redis.hdel(f"job-files:{agent_id}:{job.hash}", *agentFilesKeys)
         logging.info("Agents left=%d", new_agents)
         if new_agents <= 0:
             self.redis.hmset(

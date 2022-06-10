@@ -80,7 +80,7 @@ class Agent:
 
             if not result["result"]["datasets"].keys():
                 logging.info("No datasets found. Finish the job and return...")
-                self.db.agent_finish_job(job_id)
+                self.db.agent_finish_job(job_id, self.group_id)
                 return
 
             if "error" in result:
@@ -301,7 +301,7 @@ class Agent:
         ):
             logging.info("FINISH JOB FOR THAT DAEMON")
             # The job is over, work of this agent as done.
-            self.db.agent_finish_job(job)
+            self.db.agent_finish_job(job, self.group_id)
 
     def __process_task(self, task: AgentTask) -> None:
         """Dispatches and executes the next incoming task.
@@ -343,7 +343,7 @@ class Agent:
                 self.__search_task(job)
             except Exception as e:
                 logging.exception("Failed to execute task.")
-                self.db.agent_finish_job(job)
+                self.db.agent_finish_job(job, self.group_id)
                 self.db.fail_job(job, str(e))
         elif task.type == TaskType.YARA:
             data = json.loads(task.data)
@@ -355,7 +355,7 @@ class Agent:
                 self.__yara_task(job, iterator)
             except Exception as e:
                 logging.exception("Failed to execute task.")
-                self.db.agent_finish_job(job)
+                self.db.agent_finish_job(job, self.group_id)
                 self.db.fail_job(job, str(e))
         else:
             raise RuntimeError("Unsupported queue")
