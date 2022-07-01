@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import atexit
 import logging
 import yara  # type: ignore
 import config
@@ -390,6 +391,7 @@ def main() -> None:
     agent = Agent(agent_group_id, config.BACKEND, db)
 
     agent.main_loop()
+    atexit.register(db.unregister_active_agent)
 
 
 if __name__ == "__main__":

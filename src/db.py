@@ -389,6 +389,12 @@ class Database:
             ).json(),
         )
 
+    def unregister_active_agent(
+        self,
+        agent_id: str,
+    ) -> None:
+        self.redis.hdel("agents", agent_id)
+
     def get_active_agents(self) -> Dict[str, AgentSpecSchema]:
         return {
             name: AgentSpecSchema.parse_raw(spec)
